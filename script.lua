@@ -1,7 +1,4 @@
---[[
-	The Script Core Hub - Murder Mystery 2
-	Versión Final (todo arreglado - Touch Fling fijo)
-]]
+
 
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -526,7 +523,6 @@ function createKeybindRow(name)
 	end)
 end
 
--- Appearance & Custom Images
 local appearanceHeader = Instance.new("TextLabel")
 appearanceHeader.Size = UDim2.new(1, -10, 0, 22)
 appearanceHeader.BackgroundTransparency = 1
@@ -917,8 +913,9 @@ end
 makeDraggable(mainFrame)
 
 local selectedPlayerName = nil
-local selectedPlayerUserId = nil -- para Loop Fling si se va y vuelve
+local selectedPlayerUserId = nil
 local isTouchFlingActive = false
+local isProtectActive = false
 local isLoopGotoActive = false
 local isGunAimbotActive = false
 local isInfiniteJumpActive = false
@@ -949,9 +946,11 @@ local loopFlingConnection = nil
 local loopFlingBAV = nil
 local noclipConnection = nil
 local antiFlingConnection = nil
+local protectConnection = nil
 local combatAimbotConnection = nil
 local autoShotConnection = nil
 local killAuraConnection = nil
+local protectBtn = nil
 
 local sessionStart = tick()
 local autoGrabGun = false
@@ -996,6 +995,7 @@ function cleanupConnections()
 	if loopFlingBAV then pcall(function() loopFlingBAV:Destroy() end) loopFlingBAV = nil end
 	if noclipConnection then noclipConnection:Disconnect() noclipConnection = nil end
 	if antiFlingConnection then antiFlingConnection:Disconnect() antiFlingConnection = nil end
+	if protectConnection then protectConnection:Disconnect() protectConnection = nil end
 	if combatAimbotConnection then combatAimbotConnection:Disconnect() combatAimbotConnection = nil end
 	if autoShotConnection then autoShotConnection:Disconnect() autoShotConnection = nil end
 	if killAuraConnection then killAuraConnection:Disconnect() killAuraConnection = nil end
@@ -1410,6 +1410,155 @@ function FlingAll()
 	end)
 end
 
+function toggleProtect(enable)
+	isProtectActive = enable
+	if protectConnection then
+		protectConnection:Disconnect()
+		protectConnection = nil
+	end
+	if not enable then return end
+	if not selectedPlayerName then
+		isProtectActive = false
+		if protectBtn then
+			protectBtn.Text = "Protect: OFF"
+			protectBtn.TextColor3 = Color3.new(1, 1, 1)
+		end
+		print("[Protect] Selecciona un jugador en el dropdown")
+		return
+	end
+
+	protectConnection = RunService.Heartbeat:Connect(function()
+		if not isProtectActive or not selectedPlayerName then return end
+		if isSelfFlinging then return end
+
+		updateCharacter()
+		if not (Char and Root and Hum and Hum.Health > 0) then return end
+
+		local ally = Players:FindFirstChild(selectedPlayerName)
+		if not ally then
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p.Name == selectedPlayerName or p.DisplayName == selectedPlayerName then
+					ally = p
+					break
+				end
+			end
+		end
+		if not ally or ally == LocalPlayer or not ally.Character then return end
+
+		local aChar = ally.Character
+		local aHum = aChar:FindFirstChildWhichIsA("Humanoid")
+		local aRoot = aChar:FindFirstChild("HumanoidRootPart")
+		if not aHum or not aRoot or aHum.Health <= 0 then return end
+
+
+		for _, part in ipairs(Char:GetDescendants()) do
+			if part:IsA("BasePart") then part.CanCollide = false end
+		end
+
+		local blockingShot = false
+
+
+		local sheriff = getSheriffPlayer and getSheriffPlayer()
+		if sheriff and sheriff.Character and sheriff ~= ally then
+			local sChar = sheriff.Character
+			local sRoot = sChar:FindFirstChild("HumanoidRootPart")
+			local sHead = sChar:FindFirstChild("Head")
+			local sHum = sChar:FindFirstChildWhichIsA("Humanoid")
+			if sRoot and sHum and sHum.Health > 0 then
+				local origin = (sHead and sHead.Position) or sRoot.Position
+				local look = sRoot.CFrame.LookVector
+				local hasGun = false
+				for _, t in ipairs(sChar:GetChildren()) do
+					if t:IsA("Tool") then
+						local n = t.Name:lower()
+						if n:find("gun") or n:find("pistol") or n:find("revolver") then
+							hasGun = true
+							local handle = t:FindFirstChild("Handle") or t:FindFirstChildWhichIsA("BasePart")
+							if handle then
+								origin = handle.Position
+								look = handle.CFrame.LookVector
+							end
+							break
+						end
+					end
+				end
+
+				if hasGun then
+					local params = RaycastParams.new()
+					params.FilterType = Enum.RaycastFilterType.Exclude
+					params.FilterDescendantsInstances = {sChar, Char}
+					params.IgnoreWater = true
+					local hit = Workspace:Raycast(origin, look * 300, params)
+
+
+					local aimsAtAlly = false
+					local impactPos = nil
+					if hit and hit.Instance and hit.Instance:IsDescendantOf(aChar) then
+						aimsAtAlly = true
+						impactPos = hit.Position
+					else
+
+						local toAlly = aRoot.Position - origin
+						local proj = look * math.max(0, toAlly:Dot(look))
+						local closest = origin + proj
+						if (closest - aRoot.Position).Magnitude <= 6 and toAlly:Dot(look) > 0 then
+							aimsAtAlly = true
+							impactPos = closest
+						end
+					end
+
+					if aimsAtAlly and impactPos then
+						blockingShot = true
+
+						local dir = (impactPos - origin)
+						local dist = dir.Magnitude
+						if dist > 1 then
+							dir = dir.Unit
+
+							local blockPos = impactPos - dir * 2.2
+							safeTeleport(CFrame.new(blockPos, blockPos + look))
+						end
+					end
+				end
+			end
+		end
+
+
+		if not blockingShot then
+			local murderer = getMurdererPlayer and getMurdererPlayer()
+			if murderer and murderer.Character and murderer ~= ally then
+				local mChar = murderer.Character
+				local mRoot = mChar:FindFirstChild("HumanoidRootPart")
+				local mHum = mChar:FindFirstChildWhichIsA("Humanoid")
+				if mRoot and mHum and mHum.Health > 0 then
+					local hasKnife = false
+					for _, t in ipairs(mChar:GetChildren()) do
+						if t:IsA("Tool") then
+							local n = t.Name:lower()
+							if n:find("knife") or n:find("cuchillo") or n:find("dagger") or n:find("blade") then
+								hasKnife = true
+								break
+							end
+						end
+					end
+					local dist = (mRoot.Position - aRoot.Position).Magnitude
+					if hasKnife and dist <= 12 then
+						blockingShot = true
+
+						local mid = mRoot.Position:Lerp(aRoot.Position, 0.45)
+						safeTeleport(CFrame.new(mid + Vector3.new(0, 1, 0), mRoot.Position))
+					end
+				end
+			end
+		end
+
+
+		if not blockingShot then
+			safeTeleport(aRoot.CFrame * CFrame.new(0, 0, 2.5))
+		end
+	end)
+end
+
 function toggleTouchFling(enable)
 	isTouchFlingActive = enable
 	updateCharacter()
@@ -1709,7 +1858,7 @@ function toggleAntiFling(enable)
 	antiFlingConnection = RunService.Heartbeat:Connect(function()
 		if not isAntiFlingActive then return end
 
-		-- No interferir mientras TÚ estás flingueando
+
 		if isSelfFlinging or isLoopFlingActive or isTouchFlingActive then
 			return
 		end
@@ -1717,21 +1866,21 @@ function toggleAntiFling(enable)
 		updateCharacter()
 		if not (Char and Root and Hum and Hum.Health > 0) then return end
 
-		-- 1) Quitar movers ajenos de todas tus partes
+
 		for _, part in ipairs(Char:GetDescendants()) do
 			if part:IsA("BasePart") then
 				destroyForeignMovers(part)
 			end
 		end
 
-		-- 2) Otros jugadores: HRP sin colisión (evita fling por contacto)
+
 		for _, plr in ipairs(Players:GetPlayers()) do
 			if plr ~= LocalPlayer and plr.Character then
 				local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
 				if hrp and hrp:IsA("BasePart") then
 					hrp.CanCollide = false
 				end
-				-- también torso/upper si existen
+
 				for _, n in ipairs({"Torso", "UpperTorso", "LowerTorso"}) do
 					local p = plr.Character:FindFirstChild(n)
 					if p and p:IsA("BasePart") then
@@ -1741,7 +1890,7 @@ function toggleAntiFling(enable)
 			end
 		end
 
-		-- 3) Limitar velocidad excesiva (fling típico)
+
 		local linear = Root.AssemblyLinearVelocity
 		local angular = Root.AssemblyAngularVelocity
 		local linMag = linear.Magnitude
@@ -1766,7 +1915,7 @@ function toggleAntiFling(enable)
 			pcall(function() Root.RotVelocity = Vector3.zero end)
 		end
 
-		-- 4) Si te dejaron en PlatformStand por un fling
+
 		if Hum.PlatformStand and not isSelfFlinging and not isLoopFlingActive and not isFlyActive then
 			Hum.PlatformStand = false
 			Hum.AutoRotate = true
@@ -1994,7 +2143,6 @@ function stopLoopFling()
 	end
 end
 
-
 local function resolveSelectedTarget()
 	if selectedPlayerUserId then
 		for _, p in ipairs(Players:GetPlayers()) do
@@ -2024,7 +2172,7 @@ end
 startLoopFling = function()
 	local target = resolveSelectedTarget()
 	if not target or target == LocalPlayer then
-		-- Target no está en el server ahora; dejamos el loop ON y esperamos rejoin
+
 		isLoopFlingActive = true
 		if loopFlingBtn then
 			loopFlingBtn.Text = "Loop Fling: ON (waiting)"
@@ -2048,7 +2196,7 @@ startLoopFling = function()
 	isSelfFlinging = true
 	updateCharacter()
 	if not (Char and Hum and Root) then
-		-- Se reactivará al respawnear (reapplyActiveFeatures)
+
 		if loopFlingBtn then
 			loopFlingBtn.Text = "Loop Fling: ON"
 			loopFlingBtn.TextColor3 = COLOR_ACCENT
@@ -2086,13 +2234,13 @@ startLoopFling = function()
 	ensureBAV()
 
 	local movel = 0.1
-	local FLING_TIME = 1.6   -- segundos flingueando al target
-	local MAP_WAIT = 0.35    -- pausa en el mapa antes de volver a flinguear
+	local FLING_TIME = 1.6
+	local MAP_WAIT = 0.35
 
-	-- Ciclo: flinguear → volver al mapa → repetir (no se apaga solo)
+
 	loopFlingConnection = task.spawn(function()
 		while isLoopFlingActive do
-			-- ===== FASE FLING =====
+
 			local flingUntil = tick() + FLING_TIME
 			while isLoopFlingActive and tick() < flingUntil do
 				local target = resolveSelectedTarget()
@@ -2116,13 +2264,13 @@ startLoopFling = function()
 							end
 							ensureBAV()
 
-							-- Predicción fuerte: movimiento + salto + caída
+
 							local targetVel = tRoot.AssemblyLinearVelocity
 							if typeof(targetVel) ~= "Vector3" then
 								targetVel = tRoot.Velocity or Vector3.zero
 							end
 
-							-- Más predicción si va rápido o salta
+
 							local speed = targetVel.Magnitude
 							local predTime = 0.12
 							if speed > 40 then
@@ -2130,7 +2278,7 @@ startLoopFling = function()
 							elseif speed > 20 then
 								predTime = 0.15
 							end
-							-- Si está en el aire / saltando, anticipar vertical
+
 							local yBoost = 0
 							if tHum then
 								local state = tHum:GetState()
@@ -2142,14 +2290,14 @@ startLoopFling = function()
 								end
 							end
 							if targetVel.Y > 10 then
-								yBoost = yBoost + 1.2 -- subiendo
+								yBoost = yBoost + 1.2
 							elseif targetVel.Y < -20 then
-								yBoost = yBoost - 0.8 -- cayendo
+								yBoost = yBoost - 0.8
 							end
 
 							local predictedPos = tRoot.Position + (targetVel * predTime) + Vector3.new(0, yBoost, 0)
 
-							-- Pegarte al punto predicho (varios offsets para mejor hit)
+
 							Root.CFrame = CFrame.new(predictedPos + Vector3.new(0, 0.2, 0))
 
 							local vel = Root.Velocity
@@ -2174,9 +2322,9 @@ startLoopFling = function()
 
 			if not isLoopFlingActive then break end
 
-			-- ===== FASE VOLVER AL MAPA =====
+
 			updateCharacter()
-			-- quitar spin un momento para teletransporte limpio
+
 			if loopFlingBAV then
 				pcall(function() loopFlingBAV:Destroy() end)
 				loopFlingBAV = nil
@@ -2202,7 +2350,7 @@ startLoopFling = function()
 
 			task.wait(MAP_WAIT)
 
-			-- reactivar estado de fling para el siguiente ciclo
+
 			if isLoopFlingActive then
 				updateCharacter()
 				if Char and Hum and Root then
@@ -2899,8 +3047,6 @@ killTargetBtn.MouseButton1Click:Connect(function()
 	task.spawn(KillTargetPlayer)
 end)
 
--- ==================== TROLL DROPDOWN ====================
-
 local dropdownOpen = false
 local dropdownAnimating = false
 
@@ -2938,7 +3084,6 @@ selectedText.TextXAlignment = Enum.TextXAlignment.Left
 selectedText.ZIndex = 21
 selectedText.Parent = targetDropdown
 
--- Botón Copy Name (debajo del dropdown)
 local copyNameBtn = Instance.new("TextButton")
 copyNameBtn.Size = UDim2.new(0, 200, 0, 32)
 copyNameBtn.Position = UDim2.new(0, 220, 0, 52)
@@ -3125,7 +3270,7 @@ end
 targetDropdown.MouseButton1Click:Connect(toggleDropdown)
 
 Players.PlayerAdded:Connect(function(p)
-	-- Si Loop Fling estaba esperando a este jugador, reanudar
+
 	if isLoopFlingActive and selectedPlayerUserId and p.UserId == selectedPlayerUserId then
 		selectedPlayerName = p.Name
 		print("[Loop Fling] Target volvió a entrar:", p.Name)
@@ -3227,7 +3372,22 @@ flingAllBtn.MouseButton1Click:Connect(function()
 	end)
 end)
 
-touchFlingBtn = createButton(trollPage, "Touch Fling: OFF", 210)
+protectBtn = createButton(trollPage, "Protect: OFF", 210)
+protectBtn.MouseButton1Click:Connect(function()
+	if not selectedPlayerName and not isProtectActive then
+		protectBtn.Text = "Select player!"
+		task.delay(1.2, function()
+			if protectBtn and not isProtectActive then protectBtn.Text = "Protect: OFF" end
+		end)
+		return
+	end
+	local newState = not isProtectActive
+	toggleProtect(newState)
+	protectBtn.Text = newState and ("Protect: ON → " .. (selectedPlayerName or "?")) or "Protect: OFF"
+	protectBtn.TextColor3 = newState and COLOR_ACCENT or Color3.new(1, 1, 1)
+end)
+
+touchFlingBtn = createButton(trollPage, "Touch Fling: OFF", 250)
 touchFlingBtn.MouseButton1Click:Connect(function()
 	local newState = not isTouchFlingActive
 	toggleTouchFling(newState)
@@ -3274,7 +3434,7 @@ function startSpectate()
 	end)
 end
 
-spectateBtn = createButton(trollPage, "Spectate Selected", 250)
+spectateBtn = createButton(trollPage, "Spectate Selected", 290)
 spectateBtn.MouseButton1Click:Connect(function()
 	if isSpectating then
 		stopSpectate()
@@ -3284,7 +3444,7 @@ spectateBtn.MouseButton1Click:Connect(function()
 	end
 end)
 
-local teleportBtn = createButton(trollPage, "Teleport Selected", 290)
+local teleportBtn = createButton(trollPage, "Teleport Selected", 330)
 teleportBtn.MouseButton1Click:Connect(function()
 	if not selectedPlayerName then return end
 	local target = Players:FindFirstChild(selectedPlayerName)
@@ -3293,7 +3453,7 @@ teleportBtn.MouseButton1Click:Connect(function()
 	if tRoot then safeTeleport(tRoot.CFrame * CFrame.new(0, 3, 0)) end
 end)
 
-loopGotoBtn = createButton(trollPage, "Loop Goto: OFF", 330)
+loopGotoBtn = createButton(trollPage, "Loop Goto: OFF", 370)
 function stopLoopGoto()
 	isLoopGotoActive = false
 	if loopGotoConnection then loopGotoConnection:Disconnect() loopGotoConnection = nil end
@@ -3341,10 +3501,10 @@ Players.PlayerRemoving:Connect(function(p)
 	if wasTarget then
 		if isSpectating then stopSpectate() end
 		stopLoopGoto()
-		-- Si Loop Fling está ON, NO lo apagamos: esperamos a que vuelva a entrar
+
 		if isLoopFlingActive then
 			selectedPlayerUserId = p.UserId
-			selectedPlayerName = p.Name -- recordar nombre
+			selectedPlayerName = p.Name
 			if loopFlingBtn then
 				loopFlingBtn.Text = "Loop Fling: ON (waiting)"
 				loopFlingBtn.TextColor3 = COLOR_ACCENT
